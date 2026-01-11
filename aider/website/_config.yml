@@ -1,6 +1,12 @@
 theme: just-the-docs
 url: "https://aider.chat"
 
+# Analytics configuration
+analytics:
+  enabled: false  # Single switch to control analytics and cookie consent
+  posthog_key: 'phc_99T7muzafUMMZX15H8XePbMSreEUzahHbtWjy3l5Qbv'
+  posthog_host: 'https://us.i.posthog.com'
+
 plugins:
   - jekyll-redirect-from
   - jekyll-sitemap
@@ -24,21 +30,40 @@ exclude:
 
 aux_links:
   "GitHub":
-    - "https://github.com/paul-gauthier/aider"
+    - "https://github.com/Aider-AI/aider"
   "Discord":
-    - "https://discord.gg/Tv2uQnR88V"
+    - "https://discord.gg/Y7X7bhMQFV"
   "Blog":
     - "/blog/"
 
 nav_external_links:
   - title: "GitHub"
-    url: "https://github.com/paul-gauthier/aider"
+    url: "https://github.com/Aider-AI/aider"
   - title: "Discord"
-    url: "https://discord.gg/Tv2uQnR88V"
+    url: "https://discord.gg/Y7X7bhMQFV"
 
-repository: paul-gauthier/aider
+repository: Aider-AI/aider
 
 callouts:
   tip:
     title: Tip
     color: green
+  note:
+    title: Note
+    color: yellow
+
+# Custom CSS for our table of contents
+kramdown:
+  syntax_highlighter_opts:
+    css_class: highlight
+    
+sass:
+  style: compressed
+  
+# Additional CSS
+compress_html:
+  clippings: all
+  comments: all
+  endings: all
+  startings: []
+  

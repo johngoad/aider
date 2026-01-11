@@ -5,21 +5,45 @@ nav_order: 300
 
 # Gemini
 
-Google currently offers
-[*free* API access to the Gemini 1.5 Pro model](https://ai.google.dev/pricing).
-This is the most capable free model to use with aider,
-with code editing capability that's comparable to GPT-3.5.
 You'll need a [Gemini API key](https://aistudio.google.com/app/u/2/apikey).
 
-```
-python -m pip install aider-chat
+First, install aider:
 
+{% include install.md %}
+
+Then configure your API keys:
+
+```bash
 export GEMINI_API_KEY=<key> # Mac/Linux
 setx   GEMINI_API_KEY <key> # Windows, restart shell after setx
-
-aider --model gemini/gemini-1.5-pro-latest
-
-# List models available from Gemini
-aider --models gemini/
 ```
 
+Start working with aider and Gemini on your codebase:
+
+
+```bash
+# Change directory into your codebase
+cd /to/your/project
+
+# You can run the Gemini 2.5 Pro model with this shortcut:
+aider --model gemini
+
+# You can run the Gemini 2.5 Pro Exp for free, with usage limits:
+aider --model gemini-exp
+
+# List models available from Gemini
+aider --list-models gemini/
+```
+
+You may need to install the `google-generativeai` package. 
+
+```bash
+# If you installed with aider-install or `uv tool`
+uv tool run --from aider-chat pip install google-generativeai
+
+# Or with pipx...
+pipx inject aider-chat google-generativeai
+
+# Or with pip
+pip install -U google-generativeai
+```

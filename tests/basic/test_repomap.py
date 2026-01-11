@@ -278,193 +278,163 @@ class TestRepoMapTypescript(unittest.TestCase):
     def setUp(self):
         self.GPT35 = Model("gpt-3.5-turbo")
 
-    def test_get_repo_map_typescript(self):
-        # Create a temporary directory with a sample TypeScript file
-        test_file_ts = "test_file.ts"
-        file_content_ts = """\
-interface IMyInterface {
-    someMethod(): void;
-}
-
-type ExampleType = {
-    key: string;
-    value: number;
-};
-
-enum Status {
-    New,
-    InProgress,
-    Completed,
-}
-
-export class MyClass {
-    constructor(public value: number) {}
-
-    add(input: number): number {
-        return this.value + input;
-        return this.value + input;
-    }
-}
-
-export function myFunction(input: number): number {
-    return input * 2;
-}
-"""
-
-        with IgnorantTemporaryDirectory() as temp_dir:
-            with open(os.path.join(temp_dir, test_file_ts), "w") as f:
-                f.write(file_content_ts)
-
-            io = InputOutput()
-            repo_map = RepoMap(main_model=self.GPT35, root=temp_dir, io=io)
-            other_files = [os.path.join(temp_dir, test_file_ts)]
-            result = repo_map.get_repo_map([], other_files)
-
-            # Check if the result contains the expected tags map with TypeScript identifiers
-            self.assertIn("test_file.ts", result)
-            self.assertIn("IMyInterface", result)
-            self.assertIn("ExampleType", result)
-            self.assertIn("Status", result)
-            self.assertIn("MyClass", result)
-            self.assertIn("add", result)
-            self.assertIn("myFunction", result)
-
-            # close the open cache files, so Windows won't error
-            del repo_map
-
-    def test_get_repo_map_tsx(self):
-        # Create a temporary directory with a sample TSX file
-        test_file_tsx = "test_file.tsx"
-        file_content_tsx = """\
-import React from 'react';
-
-interface GreetingProps {
-    name: string;
-}
-
-const Greeting: React.FC<GreetingProps> = ({ name }) => {
-    return <h1>Hello, {name}!</h1>;
-};
-
-export default Greeting;
-"""
-
-        with IgnorantTemporaryDirectory() as temp_dir:
-            with open(os.path.join(temp_dir, test_file_tsx), "w") as f:
-                f.write(file_content_tsx)
-
-            io = InputOutput()
-            repo_map = RepoMap(main_model=self.GPT35, root=temp_dir, io=io)
-            other_files = [os.path.join(temp_dir, test_file_tsx)]
-            result = repo_map.get_repo_map([], other_files)
-
-            # Check if the result contains the expected tags map with TSX identifiers
-            self.assertIn("test_file.tsx", result)
-            self.assertIn("GreetingProps", result)
-            self.assertIn("Greeting", result)
-
-            # close the open cache files, so Windows won't error
-            del repo_map
-
 
 class TestRepoMapAllLanguages(unittest.TestCase):
     def setUp(self):
         self.GPT35 = Model("gpt-3.5-turbo")
+        self.fixtures_dir = Path(__file__).parent.parent / "fixtures" / "languages"
 
-    def test_get_repo_map_all_languages(self):
-        language_files = {
-            "c": (
-                "test.c",
-                (
-                    '#include <stdio.h>\n\nint main() {\n    printf("Hello, World!\\n");\n   '
-                    " return 0;\n}\n"
-                ),
-            ),
-            "csharp": (
-                "test.cs",
-                (
-                    "using System;\n\nclass Program {\n    static void Main() {\n       "
-                    ' Console.WriteLine("Hello, World!");\n    }\n}\n'
-                ),
-            ),
-            "cpp": (
-                "test.cpp",
-                (
-                    '#include <iostream>\n\nint main() {\n    std::cout << "Hello, World!" <<'
-                    " std::endl;\n    return 0;\n}\n"
-                ),
-            ),
-            "elisp": ("test.el", '(defun greet (name)\n  (message "Hello, %s!" name))\n'),
-            "elixir": (
-                "test.ex",
-                (
-                    'defmodule Greeter do\n  def hello(name) do\n    IO.puts("Hello, #{name}!")\n '
-                    " end\nend\n"
-                ),
-            ),
-            "elm": (
-                "test.elm",
-                (
-                    "module Main exposing (main)\n\nimport Html exposing (text)\n\nmain =\n    text"
-                    ' "Hello, World!"\n'
-                ),
-            ),
-            "go": (
-                "test.go",
-                (
-                    'package main\n\nimport "fmt"\n\nfunc main() {\n    fmt.Println("Hello,'
-                    ' World!")\n}\n'
-                ),
-            ),
-            "java": (
-                "Test.java",
-                (
-                    "public class Test {\n    public static void main(String[] args) {\n       "
-                    ' System.out.println("Hello, World!");\n    }\n}\n'
-                ),
-            ),
-            "javascript": (
-                "test.js",
-                "function greet(name) {\n    console.log(`Hello, ${name}!`);\n}\n",
-            ),
-            "ocaml": ("test.ml", 'let greet name =\n  Printf.printf "Hello, %s!\\n" name\n'),
-            "php": (
-                "test.php",
-                '<?php\nfunction greet($name) {\n    echo "Hello, $name!";\n}\n?>\n',
-            ),
-            "python": ("test.py", 'def greet(name):\n    print(f"Hello, {name}!")\n'),
-            "ql": ("test.ql", 'predicate greet(string name) {\n  name = "World"\n}\n'),
-            "ruby": ("test.rb", 'def greet(name)\n  puts "Hello, #{name}!"\nend\n'),
-            "rust": ("test.rs", 'fn main() {\n    println!("Hello, World!");\n}\n'),
-            "typescript": (
-                "test.ts",
-                "function greet(name: string): void {\n    console.log(`Hello, ${name}!`);\n}\n",
-            ),
-            "tsx": (
-                "test.tsx",
-                (
-                    "import React from 'react';\n\nconst Greeting: React.FC<{ name: string }> = ({"
-                    " name }) => {\n    return <h1>Hello, {name}!</h1>;\n};\n\nexport default"
-                    " Greeting;\n"
-                ),
-            ),
-        }
+    def test_language_c(self):
+        self._test_language_repo_map("c", "c", "main")
 
-        with IgnorantTemporaryDirectory() as temp_dir:
-            for _, (filename, content) in language_files.items():
-                with open(os.path.join(temp_dir, filename), "w") as f:
-                    f.write(content)
+    def test_language_cpp(self):
+        self._test_language_repo_map("cpp", "cpp", "main")
+
+    def test_language_d(self):
+        self._test_language_repo_map("d", "d", "main")
+
+    def test_language_dart(self):
+        self._test_language_repo_map("dart", "dart", "Person")
+
+    def test_language_elixir(self):
+        self._test_language_repo_map("elixir", "ex", "Greeter")
+
+    def test_language_gleam(self):
+        self._test_language_repo_map("gleam", "gleam", "greet")
+
+    def test_language_haskell(self):
+        self._test_language_repo_map("haskell", "hs", "add")
+
+    def test_language_java(self):
+        self._test_language_repo_map("java", "java", "Greeting")
+
+    def test_language_javascript(self):
+        self._test_language_repo_map("javascript", "js", "Person")
+
+    def test_language_kotlin(self):
+        self._test_language_repo_map("kotlin", "kt", "Greeting")
+
+    def test_language_lua(self):
+        self._test_language_repo_map("lua", "lua", "greet")
+
+    def test_language_php(self):
+        self._test_language_repo_map("php", "php", "greet")
+
+    def test_language_python(self):
+        self._test_language_repo_map("python", "py", "Person")
+
+    # "ql": ("ql", "greet"), # not supported in tsl-pack (yet?)
+
+    def test_language_ruby(self):
+        self._test_language_repo_map("ruby", "rb", "greet")
+
+    def test_language_rust(self):
+        self._test_language_repo_map("rust", "rs", "Person")
+
+    def test_language_typescript(self):
+        self._test_language_repo_map("typescript", "ts", "greet")
+
+    def test_language_tsx(self):
+        self._test_language_repo_map("tsx", "tsx", "UserProps")
+
+    def test_language_zig(self):
+        self._test_language_repo_map("zig", "zig", "add")
+
+    def test_language_csharp(self):
+        self._test_language_repo_map("csharp", "cs", "IGreeter")
+
+    def test_language_elisp(self):
+        self._test_language_repo_map("elisp", "el", "greeter")
+
+    def test_language_elm(self):
+        self._test_language_repo_map("elm", "elm", "Person")
+
+    def test_language_go(self):
+        self._test_language_repo_map("go", "go", "Greeter")
+
+    def test_language_hcl(self):
+        self._test_language_repo_map("hcl", "tf", "aws_vpc")
+
+    def test_language_arduino(self):
+        self._test_language_repo_map("arduino", "ino", "setup")
+
+    def test_language_chatito(self):
+        self._test_language_repo_map("chatito", "chatito", "intent")
+
+    def test_language_clojure(self):
+        self._test_language_repo_map("clojure", "clj", "greet")
+
+    def test_language_commonlisp(self):
+        self._test_language_repo_map("commonlisp", "lisp", "greet")
+
+    def test_language_pony(self):
+        self._test_language_repo_map("pony", "pony", "Greeter")
+
+    def test_language_properties(self):
+        self._test_language_repo_map("properties", "properties", "database.url")
+
+    def test_language_r(self):
+        self._test_language_repo_map("r", "r", "calculate")
+
+    def test_language_racket(self):
+        self._test_language_repo_map("racket", "rkt", "greet")
+
+    def test_language_solidity(self):
+        self._test_language_repo_map("solidity", "sol", "SimpleStorage")
+
+    def test_language_swift(self):
+        self._test_language_repo_map("swift", "swift", "Greeter")
+
+    def test_language_udev(self):
+        self._test_language_repo_map("udev", "rules", "USB_DRIVER")
+
+    def test_language_scala(self):
+        self._test_language_repo_map("scala", "scala", "Greeter")
+
+    def test_language_ocaml(self):
+        self._test_language_repo_map("ocaml", "ml", "Greeter")
+
+    def test_language_ocaml_interface(self):
+        self._test_language_repo_map("ocaml_interface", "mli", "Greeter")
+
+    def test_language_matlab(self):
+        self._test_language_repo_map("matlab", "m", "Person")
+
+    def _test_language_repo_map(self, lang, key, symbol):
+        """Helper method to test repo map generation for a specific language."""
+        # Get the fixture file path and name based on language
+        fixture_dir = self.fixtures_dir / lang
+        filename = f"test.{key}"
+        fixture_path = fixture_dir / filename
+        self.assertTrue(fixture_path.exists(), f"Fixture file missing for {lang}: {fixture_path}")
+
+        # Read the fixture content
+        with open(fixture_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        with GitTemporaryDirectory() as temp_dir:
+            test_file = os.path.join(temp_dir, filename)
+            with open(test_file, "w", encoding="utf-8") as f:
+                f.write(content)
 
             io = InputOutput()
             repo_map = RepoMap(main_model=self.GPT35, root=temp_dir, io=io)
-            other_files = [
-                os.path.join(temp_dir, filename) for filename, _ in language_files.values()
-            ]
+            other_files = [test_file]
             result = repo_map.get_repo_map([], other_files)
+            dump(lang)
+            dump(result)
 
-            # Check if the result contains all the expected files
-            for lang, (filename, _) in language_files.items():
-                self.assertIn(filename, result, f"File for language {lang} not found in repo map")
+            print(result)
+            self.assertGreater(len(result.strip().splitlines()), 1)
+
+            # Check if the result contains all the expected files and symbols
+            self.assertIn(
+                filename, result, f"File for language {lang} not found in repo map: {result}"
+            )
+            self.assertIn(
+                symbol,
+                result,
+                f"Key symbol '{symbol}' for language {lang} not found in repo map: {result}",
+            )
 
             # close the open cache files, so Windows won't error
             del repo_map

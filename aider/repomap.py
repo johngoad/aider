@@ -2,6 +2,7 @@ import colorsys
 import math
 import os
 import random
+import shutil
 import sqlite3
 import sys
 import time
@@ -18,17 +19,26 @@ from tqdm import tqdm
 
 from aider.dump import dump
 from aider.special import filter_important_files
-from aider.utils import Spinner
+from aider.waiting import Spinner
 
 # tree_sitter is throwing a FutureWarning
 warnings.simplefilter("ignore", category=FutureWarning)
-from tree_sitter_languages import get_language, get_parser  # noqa: E402
+from grep_ast.tsl import USING_TSL_PACK, get_language, get_parser  # noqa: E402
 
 Tag = namedtuple("Tag", "rel_fname fname line name kind".split())
 
 
+SQLITE_ERRORS = (sqlite3.OperationalError, sqlite3.DatabaseError, OSError)
+
+
+CACHE_VERSION = 3
+if USING_TSL_PACK:
+    CACHE_VERSION = 4
+
+UPDATING_REPO_MAP_MESSAGE = "Updating repo map"
+
+
 class RepoMap:
-    CACHE_VERSION = 3
     TAGS_CACHE_DIR = f".aider.tags.cache.v{CACHE_VERSION}"
 
     warned_files = set()
@@ -163,13 +173,52 @@ class RepoMap:
             # Just return the full fname.
             return fname
 
+    def tags_cache_error(self, original_error=None):
+        """Handle SQLite errors by trying to recreate cache, falling back to dict if needed"""
+
+        if self.verbose and original_error:
+            self.io.tool_warning(f"Tags cache error: {str(original_error)}")
+
+        if isinstance(getattr(self, "TAGS_CACHE", None), dict):
+            return
+
+        path = Path(self.root) / self.TAGS_CACHE_DIR
+
+        # Try to recreate the cache
+        try:
+            # Delete existing cache dir
+            if path.exists():
+                shutil.rmtree(path)
+
+            # Try to create new cache
+            new_cache = Cache(path)
+
+            # Test that it works
+            test_key = "test"
+            new_cache[test_key] = "test"
+            _ = new_cache[test_key]
+            del new_cache[test_key]
+
+            # If we got here, the new cache works
+            self.TAGS_CACHE = new_cache
+            return
+
+        except SQLITE_ERRORS as e:
+            # If anything goes wrong, warn and fall back to dict
+            self.io.tool_warning(
+                f"Unable to use tags cache at {path}, falling back to memory cache"
+            )
+            if self.verbose:
+                self.io.tool_warning(f"Cache recreation error: {str(e)}")
+
+        self.TAGS_CACHE = dict()
+
     def load_tags_cache(self):
         path = Path(self.root) / self.TAGS_CACHE_DIR
         try:
             self.TAGS_CACHE = Cache(path)
-        except sqlite3.OperationalError:
-            self.io.tool_error(f"Unable to use tags cache, delete {path} to resolve.")
-            self.TAGS_CACHE = dict()
+        except SQLITE_ERRORS as e:
+            self.tags_cache_error(e)
 
     def save_tags_cache(self):
         pass
@@ -178,7 +227,7 @@ class RepoMap:
         try:
             return os.path.getmtime(fname)
         except FileNotFoundError:
-            self.io.tool_error(f"File not found error: {fname}")
+            self.io.tool_warning(f"File not found error: {fname}")
 
     def get_tags(self, fname, rel_fname):
         # Check if the file is in the cache and if the modification time has not changed
@@ -187,15 +236,30 @@ class RepoMap:
             return []
 
         cache_key = fname
-        if cache_key in self.TAGS_CACHE and self.TAGS_CACHE[cache_key]["mtime"] == file_mtime:
-            return self.TAGS_CACHE[cache_key]["data"]
+        try:
+            val = self.TAGS_CACHE.get(cache_key)  # Issue #1308
+        except SQLITE_ERRORS as e:
+            self.tags_cache_error(e)
+            val = self.TAGS_CACHE.get(cache_key)
+
+        if val is not None and val.get("mtime") == file_mtime:
+            try:
+                return self.TAGS_CACHE[cache_key]["data"]
+            except SQLITE_ERRORS as e:
+                self.tags_cache_error(e)
+                return self.TAGS_CACHE[cache_key]["data"]
 
         # miss!
         data = list(self.get_tags_raw(fname, rel_fname))
 
         # Update the cache
-        self.TAGS_CACHE[cache_key] = {"mtime": file_mtime, "data": data}
-        self.save_tags_cache()
+        try:
+            self.TAGS_CACHE[cache_key] = {"mtime": file_mtime, "data": data}
+            self.save_tags_cache()
+        except SQLITE_ERRORS as e:
+            self.tags_cache_error(e)
+            self.TAGS_CACHE[cache_key] = {"mtime": file_mtime, "data": data}
+
         return data
 
     def get_tags_raw(self, fname, rel_fname):
@@ -224,10 +288,15 @@ class RepoMap:
         query = language.query(query_scm)
         captures = query.captures(tree.root_node)
 
-        captures = list(captures)
-
         saw = set()
-        for node, tag in captures:
+        if USING_TSL_PACK:
+            all_nodes = []
+            for tag, nodes in captures.items():
+                all_nodes += [(node, tag) for node in nodes]
+        else:
+            all_nodes = list(captures)
+
+        for node, tag in all_nodes:
             if tag.startswith("name.definition."):
                 kind = "def"
             elif tag.startswith("name.reference."):
@@ -294,7 +363,13 @@ class RepoMap:
         # https://networkx.org/documentation/stable/_modules/networkx/algorithms/link_analysis/pagerank_alg.html#pagerank
         personalize = 100 / len(fnames)
 
-        if len(fnames) - len(self.TAGS_CACHE) > 100:
+        try:
+            cache_size = len(self.TAGS_CACHE)
+        except SQLITE_ERRORS as e:
+            self.tags_cache_error(e)
+            cache_size = len(self.TAGS_CACHE)
+
+        if len(fnames) - cache_size > 100:
             self.io.tool_output(
                 "Initial repo scan can be slow in larger repos, but only happens once."
             )
@@ -304,30 +379,51 @@ class RepoMap:
             showing_bar = False
 
         for fname in fnames:
+            if self.verbose:
+                self.io.tool_output(f"Processing {fname}")
             if progress and not showing_bar:
-                progress()
+                progress(f"{UPDATING_REPO_MAP_MESSAGE}: {fname}")
 
-            if not Path(fname).is_file():
+            try:
+                file_ok = Path(fname).is_file()
+            except OSError:
+                file_ok = False
+
+            if not file_ok:
                 if fname not in self.warned_files:
-                    if Path(fname).exists():
-                        self.io.tool_error(
-                            f"Repo-map can't include {fname}, it is not a normal file"
-                        )
-                    else:
-                        self.io.tool_error(f"Repo-map can't include {fname}, it no longer exists")
-
-                self.warned_files.add(fname)
+                    self.io.tool_warning(f"Repo-map can't include {fname}")
+                    self.io.tool_output(
+                        "Has it been deleted from the file system but not from git?"
+                    )
+                    self.warned_files.add(fname)
                 continue
 
             # dump(fname)
             rel_fname = self.get_rel_fname(fname)
+            current_pers = 0.0  # Start with 0 personalization score
 
             if fname in chat_fnames:
-                personalization[rel_fname] = personalize
+                current_pers += personalize
                 chat_rel_fnames.add(rel_fname)
 
             if rel_fname in mentioned_fnames:
-                personalization[rel_fname] = personalize
+                # Use max to avoid double counting if in chat_fnames and mentioned_fnames
+                current_pers = max(current_pers, personalize)
+
+            # Check path components against mentioned_idents
+            path_obj = Path(rel_fname)
+            path_components = set(path_obj.parts)
+            basename_with_ext = path_obj.name
+            basename_without_ext, _ = os.path.splitext(basename_with_ext)
+            components_to_check = path_components.union({basename_with_ext, basename_without_ext})
+
+            matched_idents = components_to_check.intersection(mentioned_idents)
+            if matched_idents:
+                # Add personalization *once* if any path component matches a mentioned ident
+                current_pers += personalize
+
+            if current_pers > 0:
+                personalization[rel_fname] = current_pers  # Assign the final calculated value
 
             tags = list(self.get_tags(fname, rel_fname))
             if tags is None:
@@ -354,17 +450,34 @@ class RepoMap:
 
         G = nx.MultiDiGraph()
 
+        # Add a small self-edge for every definition that has no references
+        # Helps with tree-sitter 0.23.2 with ruby, where "def greet(name)"
+        # isn't counted as a def AND a ref. tree-sitter 0.24.0 does.
+        for ident in defines.keys():
+            if ident in references:
+                continue
+            for definer in defines[ident]:
+                G.add_edge(definer, definer, weight=0.1, ident=ident)
+
         for ident in idents:
             if progress:
-                progress()
+                progress(f"{UPDATING_REPO_MAP_MESSAGE}: {ident}")
 
             definers = defines[ident]
+
+            mul = 1.0
+
+            is_snake = ("_" in ident) and any(c.isalpha() for c in ident)
+            is_kebab = ("-" in ident) and any(c.isalpha() for c in ident)
+            is_camel = any(c.isupper() for c in ident) and any(c.islower() for c in ident)
             if ident in mentioned_idents:
-                mul = 10
-            elif ident.startswith("_"):
-                mul = 0.1
-            else:
-                mul = 1
+                mul *= 10
+            if (is_snake or is_kebab or is_camel) and len(ident) >= 8:
+                mul *= 10
+            if ident.startswith("_"):
+                mul *= 0.1
+            if len(defines[ident]) > 5:
+                mul *= 0.1
 
             for referencer, num_refs in Counter(references[ident]).items():
                 for definer in definers:
@@ -372,10 +485,14 @@ class RepoMap:
                     # if referencer == definer:
                     #    continue
 
+                    use_mul = mul
+                    if referencer in chat_rel_fnames:
+                        use_mul *= 50
+
                     # scale down so high freq (low value) mentions don't dominate
                     num_refs = math.sqrt(num_refs)
 
-                    G.add_edge(referencer, definer, weight=mul * num_refs, ident=ident)
+                    G.add_edge(referencer, definer, weight=use_mul * num_refs, ident=ident)
 
         if not references:
             pass
@@ -388,13 +505,17 @@ class RepoMap:
         try:
             ranked = nx.pagerank(G, weight="weight", **pers_args)
         except ZeroDivisionError:
-            return []
+            # Issue #1536
+            try:
+                ranked = nx.pagerank(G, weight="weight")
+            except ZeroDivisionError:
+                return []
 
         # distribute the rank from each source node, across all of its out edges
         ranked_definitions = defaultdict(float)
         for src in G.nodes:
             if progress:
-                progress()
+                progress(f"{UPDATING_REPO_MAP_MESSAGE}: {src}")
 
             src_rank = ranked[src]
             total_weight = sum(data["weight"] for _src, _dst, data in G.out_edges(src, data=True))
@@ -405,7 +526,9 @@ class RepoMap:
                 ranked_definitions[(dst, ident)] += data["rank"]
 
         ranked_tags = []
-        ranked_definitions = sorted(ranked_definitions.items(), reverse=True, key=lambda x: x[1])
+        ranked_definitions = sorted(
+            ranked_definitions.items(), reverse=True, key=lambda x: (x[1], x[0])
+        )
 
         # dump(ranked_definitions)
 
@@ -441,12 +564,20 @@ class RepoMap:
         force_refresh=False,
     ):
         # Create a cache key
-        cache_key = (
+        cache_key = [
             tuple(sorted(chat_fnames)) if chat_fnames else None,
             tuple(sorted(other_fnames)) if other_fnames else None,
             max_map_tokens,
-        )
+        ]
 
+        if self.refresh == "auto":
+            cache_key += [
+                tuple(sorted(mentioned_fnames)) if mentioned_fnames else None,
+                tuple(sorted(mentioned_idents)) if mentioned_idents else None,
+            ]
+        cache_key = tuple(cache_key)
+
+        use_cache = False
         if not force_refresh:
             if self.refresh == "manual" and self.last_map:
                 return self.last_map
@@ -493,7 +624,7 @@ class RepoMap:
         if not mentioned_idents:
             mentioned_idents = set()
 
-        spin = Spinner("Updating repo map")
+        spin = Spinner(UPDATING_REPO_MAP_MESSAGE)
 
         ranked_tags = self.get_ranked_tags(
             chat_fnames,
@@ -505,6 +636,8 @@ class RepoMap:
 
         other_rel_fnames = sorted(set(self.get_rel_fname(fname) for fname in other_fnames))
         special_fnames = filter_important_files(other_rel_fnames)
+        ranked_tags_fnames = set(tag[0] for tag in ranked_tags)
+        special_fnames = [fn for fn in special_fnames if fn not in ranked_tags_fnames]
         special_fnames = [(fn,) for fn in special_fnames]
 
         ranked_tags = special_fnames + ranked_tags
@@ -521,11 +654,15 @@ class RepoMap:
 
         self.tree_cache = dict()
 
-        middle = min(max_map_tokens // 25, num_tags)
+        middle = min(int(max_map_tokens // 25), num_tags)
         while lower_bound <= upper_bound:
             # dump(lower_bound, middle, upper_bound)
 
-            spin.step()
+            if middle > 1500:
+                show_tokens = f"{middle / 1000.0:.1f}K"
+            else:
+                show_tokens = str(middle)
+            spin.step(f"{UPDATING_REPO_MAP_MESSAGE}: {show_tokens} tokens")
 
             tree = self.to_tree(ranked_tags[:middle], chat_rel_fnames)
             num_tokens = self.token_count(tree)
@@ -544,7 +681,7 @@ class RepoMap:
             else:
                 upper_bound = middle - 1
 
-            middle = (lower_bound + upper_bound) // 2
+            middle = int((lower_bound + upper_bound) // 2)
 
         spin.end()
         return best_tree
@@ -648,8 +785,27 @@ def get_random_color():
 
 def get_scm_fname(lang):
     # Load the tags queries
+    if USING_TSL_PACK:
+        subdir = "tree-sitter-language-pack"
+        try:
+            path = resources.files(__package__).joinpath(
+                "queries",
+                subdir,
+                f"{lang}-tags.scm",
+            )
+            if path.exists():
+                return path
+        except KeyError:
+            pass
+
+    # Fall back to tree-sitter-languages
+    subdir = "tree-sitter-languages"
     try:
-        return resources.files(__package__).joinpath("queries", f"tree-sitter-{lang}-tags.scm")
+        return resources.files(__package__).joinpath(
+            "queries",
+            subdir,
+            f"{lang}-tags.scm",
+        )
     except KeyError:
         return
 

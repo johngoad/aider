@@ -12,11 +12,12 @@ Every LLM has limits on how many tokens it can process for each request:
 - Each model has limit on how many **output tokens** it can
 produce.
 
-Aider will report an error if a model responds indicating that
+Aider will report an error **if a model responds** indicating that
 it has exceeded a token limit.
 The error will include suggested actions to try and
 avoid hitting token limits.
-Here's an example error:
+
+Here's an example error: 
 
 ```
 Model gpt-3.5-turbo has hit a token limit!
@@ -28,10 +29,15 @@ Total tokens: 4864 of 16385
 To reduce output tokens:
 - Ask for smaller changes in each request.
 - Break your code into smaller source files.
-- Try using a stronger model like gpt-4o or opus that can return diffs.
+- Try using a stronger model like DeepSeek V3 or Sonnet that can return diffs.
 
 For more info: https://aider.chat/docs/token-limits.html
 ```
+
+{: .note }
+Aider never *enforces* token limits, it only *reports* token limit errors
+from the API provider.
+The token counts that aider reports are *estimates*.
 
 ## Input tokens & context window size
 
@@ -41,7 +47,7 @@ overflowing its context window.
 Technically you can exhaust the context window if the input is
 too large or if the input plus output are too large.
 
-Strong models like GPT-4o and Opus have quite
+Strong models like GPT-4o and Sonnet have quite
 large context windows, so this sort of error is
 typically only an issue when working with weaker models.
 
@@ -67,8 +73,8 @@ To avoid hitting output token limits:
 
 - Ask for smaller changes in each request.
 - Break your code into smaller source files.
-- Use a strong model like gpt-4o, sonnet or opus that can return diffs.
-
+- Use a strong model like gpt-4o, sonnet or DeepSeek V3 that can return diffs.
+- Use a model that supports [infinite output](/docs/more/infinite-output.html).
 
 ## Other causes
 

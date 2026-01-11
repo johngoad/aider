@@ -96,7 +96,7 @@ class YamlHelpFormatter(argparse.HelpFormatter):
 # Place in your home dir, or at the root of your git repo.
 ##########################################################
 
-# Note: You can only put OpenAI and Anthropic API keys in the yaml
+# Note: You can only put OpenAI and Anthropic API keys in the YAML
 # config file. Keys for all APIs can be stored in a .env file
 # https://aider.chat/docs/config/dotenv.html
 
@@ -143,9 +143,22 @@ class YamlHelpFormatter(argparse.HelpFormatter):
             default = "true"
 
         if default:
-            parts.append(f"#{switch}: {default}\n")
+            if "#" in default:
+                parts.append(f'#{switch}: "{default}"\n')
+            else:
+                parts.append(f"#{switch}: {default}\n")
+        elif action.nargs in ("*", "+") or isinstance(action, argparse._AppendAction):
+            parts.append(f"#{switch}: xxx")
+            parts.append("## Specify multiple values like this:")
+            parts.append(f"#{switch}:")
+            parts.append("#  - xxx")
+            parts.append("#  - yyy")
+            parts.append("#  - zzz")
         else:
-            parts.append(f"#{switch}:\n")
+            if switch.endswith("color"):
+                parts.append(f'#{switch}: "xxx"\n')
+            else:
+                parts.append(f"#{switch}: xxx\n")
 
         ###
         # parts.append(str(action))

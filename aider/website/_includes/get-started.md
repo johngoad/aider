@@ -1,17 +1,22 @@
 
-You can get started quickly like this:
+If you already have python 3.8-3.13 installed, you can get started quickly like this.
 
-```
-python -m pip install aider-chat
+First, install aider:
 
-# Change directory into a git repo
-cd /to/your/git/repo
+{% include install.md %}
 
-# Work with Claude 3.5 Sonnet on your repo
-export ANTHROPIC_API_KEY=your-key-goes-here
-aider
+Start working with aider on your codebase:
 
-# Work with GPT-4o on your repo
-export OPENAI_API_KEY=your-key-goes-here
-aider 
+```bash
+# Change directory into your codebase
+cd /to/your/project
+
+# DeepSeek
+aider --model deepseek --api-key deepseek=<key>
+
+# Claude 3.7 Sonnet
+aider --model sonnet --api-key anthropic=<key>
+
+# o3-mini
+aider --model o3-mini --api-key openai=<key>
 ```

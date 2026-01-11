@@ -11,7 +11,7 @@ You can add images and URLs to the aider chat.
 ## Images
 
 Aider supports working with image files for many vision-capable models
-like GPT-4o and Claude 3.5 Sonnet.
+like GPT-4o and Claude 3.7 Sonnet.
 Adding images to a chat can be helpful in many situations:
 
 - Add screenshots of web pages or UIs that you want aider to build or modify.
@@ -23,7 +23,7 @@ You can add images to the chat just like you would
 add any other file:
 
 - Use `/add <image-filename>` from within the chat
-- Use `/clipboard` to paste an image from your clipboard into the chat.
+- Use `/paste` to paste an image from your clipboard into the chat.
 - Launch aider with image filenames on the command line: `aider <image-filename>` along with any other command line arguments you need.
 
 ## Web pages
@@ -40,4 +40,9 @@ To add URLs to the chat:
 - Use `/web <url>`
 - Just paste the URL into the chat and aider will ask if you want to add it.
 
+You can also scrape web pages from the command line to see the markdown version that aider produces:
 
+
+```
+python -m aider.scrape https://aider.chat/docs/usage/tips.html
+```

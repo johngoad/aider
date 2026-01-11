@@ -7,16 +7,20 @@ from unittest.mock import MagicMock, patch
 import git
 
 from aider.coders import Coder
+from aider.coders.base_coder import FinishReasonLength, UnknownEditFormat
 from aider.dump import dump  # noqa: F401
 from aider.io import InputOutput
 from aider.models import Model
 from aider.repo import GitRepo
+from aider.sendchat import sanity_check_messages
 from aider.utils import GitTemporaryDirectory
 
 
 class TestCoder(unittest.TestCase):
     def setUp(self):
         self.GPT35 = Model("gpt-3.5-turbo")
+        self.webbrowser_patcher = patch("aider.io.webbrowser.open")
+        self.mock_webbrowser = self.webbrowser_patcher.start()
 
     def test_allowed_to_edit(self):
         with GitTemporaryDirectory():
@@ -33,7 +37,9 @@ class TestCoder(unittest.TestCase):
             repo.git.commit("-m", "init")
 
             # YES!
-            io = InputOutput(yes=True)
+            # Use a completely mocked IO object instead of a real one
+            io = MagicMock()
+            io.confirm_ask = MagicMock(return_value=True)
             coder = Coder.create(self.GPT35, None, io, fnames=["added.txt"])
 
             self.assertTrue(coder.allowed_to_edit("added.txt"))
@@ -166,6 +172,37 @@ class TestCoder(unittest.TestCase):
 
             self.assertEqual(coder.abs_fnames, set([str(fname.resolve())]))
 
+    def test_skip_duplicate_basename_mentions(self):
+        with GitTemporaryDirectory():
+            io = InputOutput(pretty=False, yes=True)
+            coder = Coder.create(self.GPT35, None, io)
+
+            # Create files with same basename in different directories
+            fname1 = Path("dir1") / "file.txt"
+            fname2 = Path("dir2") / "file.txt"
+            fname3 = Path("dir3") / "unique.txt"
+
+            for fname in [fname1, fname2, fname3]:
+                fname.parent.mkdir(parents=True, exist_ok=True)
+                fname.touch()
+
+            # Add one file to chat
+            coder.add_rel_fname(str(fname1))
+
+            # Mock get_tracked_files to return all files
+            mock = MagicMock()
+            mock.return_value = set([str(fname1), str(fname2), str(fname3)])
+            coder.repo.get_tracked_files = mock
+
+            # Check that file mentions of a pure basename skips files with duplicate basenames
+            mentioned = coder.get_file_mentions(f"Check {fname2.name} and {fname3}")
+            self.assertEqual(mentioned, {str(fname3)})
+
+            # Add a read-only file with same basename
+            coder.abs_read_only_fnames.add(str(fname2.resolve()))
+            mentioned = coder.get_file_mentions(f"Check {fname1} and {fname3}")
+            self.assertEqual(mentioned, {str(fname3)})
+
     def test_check_for_file_mentions_read_only(self):
         with GitTemporaryDirectory():
             io = InputOutput(
@@ -247,6 +284,126 @@ class TestCoder(unittest.TestCase):
             coder.check_for_file_mentions(f"Please check `{fname}`")
 
             self.assertEqual(coder.abs_fnames, set([str(fname.resolve())]))
+
+    def test_get_file_mentions_various_formats(self):
+        with GitTemporaryDirectory():
+            io = InputOutput(pretty=False, yes=True)
+            coder = Coder.create(self.GPT35, None, io)
+
+            # Create test files
+            test_files = [
+                "file1.txt",
+                "file2.py",
+                "dir/nested_file.js",
+                "dir/subdir/deep_file.html",
+                "file99.txt",
+                "special_chars!@#.md",
+            ]
+
+            # Pre-format the Windows path to avoid backslash issues in f-string expressions
+            windows_path = test_files[2].replace("/", "\\")
+            win_path3 = test_files[3].replace("/", "\\")
+
+            for fname in test_files:
+                fpath = Path(fname)
+                fpath.parent.mkdir(parents=True, exist_ok=True)
+                fpath.touch()
+
+            # Mock get_addable_relative_files to return our test files
+            coder.get_addable_relative_files = MagicMock(return_value=set(test_files))
+
+            # Test different mention formats
+            test_cases = [
+                # Simple plain text mentions
+                (f"You should edit {test_files[0]} first", {test_files[0]}),
+                # Multiple files in plain text
+                (f"Edit both {test_files[0]} and {test_files[1]}", {test_files[0], test_files[1]}),
+                # Files in backticks
+                (f"Check the file `{test_files[2]}`", {test_files[2]}),
+                # Files in code blocks
+                (f"```\n{test_files[3]}\n```", {test_files[3]}),
+                # Files in code blocks with language specifier
+                # (
+                #    f"```python\nwith open('{test_files[1]}', 'r') as f:\n"
+                #    f"    data = f.read()\n```",
+                #    {test_files[1]},
+                # ),
+                # Files with Windows-style paths
+                (f"Edit the file {windows_path}", {test_files[2]}),
+                # Files with different quote styles
+                (f'Check "{test_files[5]}" now', {test_files[5]}),
+                # All files in one complex message
+                (
+                    (
+                        f"First, edit `{test_files[0]}`. Then modify {test_files[1]}.\n"
+                        f"```js\n// Update this file\nconst file = '{test_files[2]}';\n```\n"
+                        f"Finally check {win_path3}"
+                    ),
+                    {test_files[0], test_files[1], test_files[2], test_files[3]},
+                ),
+                # Files mentioned in markdown bold format
+                (f"You should check **{test_files[0]}** for issues", {test_files[0]}),
+                (
+                    f"Look at both **{test_files[1]}** and **{test_files[2]}**",
+                    {test_files[1], test_files[2]},
+                ),
+                (
+                    f"The file **{win_path3}** needs updating",
+                    {test_files[3]},
+                ),
+                (
+                    f"Files to modify:\n- **{test_files[0]}**\n- **{test_files[4]}**",
+                    {test_files[0], test_files[4]},
+                ),
+            ]
+
+            for content, expected_mentions in test_cases:
+                with self.subTest(content=content):
+                    mentioned_files = coder.get_file_mentions(content)
+                    self.assertEqual(
+                        mentioned_files,
+                        expected_mentions,
+                        f"Failed to extract mentions from: {content}",
+                    )
+
+    def test_get_file_mentions_multiline_backticks(self):
+        with GitTemporaryDirectory():
+            io = InputOutput(pretty=False, yes=True)
+            coder = Coder.create(self.GPT35, None, io)
+
+            # Create test files
+            test_files = [
+                "swebench/harness/test_spec/python.py",
+                "swebench/harness/test_spec/javascript.py",
+            ]
+            for fname in test_files:
+                fpath = Path(fname)
+                fpath.parent.mkdir(parents=True, exist_ok=True)
+                fpath.touch()
+
+            # Mock get_addable_relative_files to return our test files
+            coder.get_addable_relative_files = MagicMock(return_value=set(test_files))
+
+            # Input text with multiline backticked filenames
+            content = """
+Could you please **add the following files to the chat**?
+
+1.  `swebench/harness/test_spec/python.py`
+2.  `swebench/harness/test_spec/javascript.py`
+
+Once I have these, I can show you precisely how to do the thing.
+"""
+            expected_mentions = {
+                "swebench/harness/test_spec/python.py",
+                "swebench/harness/test_spec/javascript.py",
+            }
+
+            mentioned_files = coder.get_file_mentions(content)
+            self.assertEqual(
+                mentioned_files,
+                expected_mentions,
+                f"Failed to extract mentions from multiline backticked content: {content}",
+            )
 
     def test_get_file_mentions_path_formats(self):
         with GitTemporaryDirectory():
@@ -353,7 +510,7 @@ class TestCoder(unittest.TestCase):
         _, file1 = tempfile.mkstemp()
 
         with open(file1, "wb") as f:
-            f.write(b"this contains ``` backticks")
+            f.write(b"this contains\n```\nbackticks")
 
         files = [file1]
 
@@ -492,7 +649,7 @@ TWO
                 coder.partial_response_function_call = dict()
                 return []
 
-            def mock_get_commit_message(diffs, context):
+            def mock_get_commit_message(diffs, context, user_language=None):
                 self.assertNotIn("one", diffs)
                 self.assertNotIn("ONE", diffs)
                 return "commit message"
@@ -547,7 +704,7 @@ three
 
             saved_diffs = []
 
-            def mock_get_commit_message(diffs, context):
+            def mock_get_commit_message(diffs, context, user_language=None):
                 saved_diffs.append(diffs)
                 return "commit message"
 
@@ -625,7 +782,7 @@ two
 
             saved_diffs = []
 
-            def mock_get_commit_message(diffs, context):
+            def mock_get_commit_message(diffs, context, user_language=None):
                 saved_diffs.append(diffs)
                 return "commit message"
 
@@ -676,6 +833,36 @@ two
             self.assertNotIn(fname1, str(coder.abs_fnames))
             self.assertNotIn(fname2, str(coder.abs_fnames))
             self.assertNotIn(fname3, str(coder.abs_fnames))
+
+    def test_skip_gitignored_files_on_init(self):
+        with GitTemporaryDirectory() as _:
+            repo_path = Path(".")
+            repo = git.Repo.init(repo_path)
+
+            ignored_file = repo_path / "ignored_by_git.txt"
+            ignored_file.write_text("This file should be ignored by git.")
+
+            regular_file = repo_path / "regular_file.txt"
+            regular_file.write_text("This is a regular file.")
+
+            gitignore_content = "ignored_by_git.txt\n"
+            (repo_path / ".gitignore").write_text(gitignore_content)
+
+            repo.index.add([str(regular_file), ".gitignore"])
+            repo.index.commit("Initial commit with gitignore and regular file")
+
+            mock_io = MagicMock()
+            mock_io.tool_warning = MagicMock()
+
+            fnames_to_add = [str(ignored_file), str(regular_file)]
+
+            coder = Coder.create(self.GPT35, None, mock_io, fnames=fnames_to_add)
+
+            self.assertNotIn(str(ignored_file.resolve()), coder.abs_fnames)
+            self.assertIn(str(regular_file.resolve()), coder.abs_fnames)
+            mock_io.tool_warning.assert_any_call(
+                f"Skipping {ignored_file.name} that matches gitignore spec."
+            )
 
     def test_check_for_urls(self):
         io = InputOutput(yes=True)
@@ -737,7 +924,7 @@ two
         # Test case with no URL
         no_url_input = "This text contains no URL"
         result = coder.check_for_urls(no_url_input)
-        self.assertEqual(result, [])
+        self.assertEqual(result, no_url_input)
 
         # Test case with the same URL appearing multiple times
         repeated_url_input = (
@@ -745,7 +932,8 @@ two
             " more time"
         )
         result = coder.check_for_urls(repeated_url_input)
-        self.assertEqual(result.count("https://example.com"), 1)
+        # the original 3 in the input text, plus 1 more for the scraped text
+        self.assertEqual(result.count("https://example.com"), 4)
         self.assertIn("https://example.com", result)
 
     def test_coder_from_coder_with_subdir(self):
@@ -819,32 +1007,74 @@ This command will print 'Hello, World!' to the console."""
         with GitTemporaryDirectory():
             io = InputOutput(yes=True)
             coder = Coder.create(self.GPT35, "diff", io=io, suggest_shell_commands=False)
+            self.assertFalse(coder.suggest_shell_commands)
 
-            def mock_send(*args, **kwargs):
-                coder.partial_response_content = """Here's a shell command to run:
+    def test_detect_urls_enabled(self):
+        with GitTemporaryDirectory():
+            io = InputOutput(yes=True)
+            coder = Coder.create(self.GPT35, "diff", io=io, detect_urls=True)
+            coder.commands.scraper = MagicMock()
+            coder.commands.scraper.scrape = MagicMock(return_value="some content")
 
-```bash
-echo "Hello, World!"
-```
+            # Test with a message containing a URL
+            message = "Check out https://example.com"
+            coder.check_for_urls(message)
+            coder.commands.scraper.scrape.assert_called_once_with("https://example.com")
 
-This command will print 'Hello, World!' to the console."""
-                coder.partial_response_function_call = dict()
-                return []
+    def test_detect_urls_disabled(self):
+        with GitTemporaryDirectory():
+            io = InputOutput(yes=True)
+            coder = Coder.create(self.GPT35, "diff", io=io, detect_urls=False)
+            coder.commands.scraper = MagicMock()
+            coder.commands.scraper.scrape = MagicMock(return_value="some content")
 
-            coder.send = mock_send
+            # Test with a message containing a URL
+            message = "Check out https://example.com"
+            result = coder.check_for_urls(message)
+            self.assertEqual(result, message)
+            coder.commands.scraper.scrape.assert_not_called()
 
-            # Mock the handle_shell_commands method to check if it's called
-            coder.handle_shell_commands = MagicMock()
+    def test_unknown_edit_format_exception(self):
+        # Test the exception message format
+        invalid_format = "invalid_format"
+        valid_formats = ["diff", "whole", "map"]
+        exc = UnknownEditFormat(invalid_format, valid_formats)
+        expected_msg = (
+            f"Unknown edit format {invalid_format}. Valid formats are: {', '.join(valid_formats)}"
+        )
+        self.assertEqual(str(exc), expected_msg)
 
-            # Run the coder with a message
-            coder.run(with_message="Suggest a shell command")
+    def test_unknown_edit_format_creation(self):
+        # Test that creating a Coder with invalid edit format raises the exception
+        io = InputOutput(yes=True)
+        invalid_format = "invalid_format"
 
-            # Check if the shell command was added to the list
-            self.assertEqual(len(coder.shell_commands), 1)
-            self.assertEqual(coder.shell_commands[0].strip(), 'echo "Hello, World!"')
+        with self.assertRaises(UnknownEditFormat) as cm:
+            Coder.create(self.GPT35, invalid_format, io=io)
 
-            # Check if handle_shell_commands was called with the correct argument
-            coder.handle_shell_commands.assert_not_called()
+        exc = cm.exception
+        self.assertEqual(exc.edit_format, invalid_format)
+        self.assertIsInstance(exc.valid_formats, list)
+        self.assertTrue(len(exc.valid_formats) > 0)
+
+    def test_system_prompt_prefix(self):
+        # Test that system_prompt_prefix is properly set and used
+        io = InputOutput(yes=True)
+        test_prefix = "Test prefix. "
+
+        # Create a model with system_prompt_prefix
+        model = Model("gpt-3.5-turbo")
+        model.system_prompt_prefix = test_prefix
+
+        coder = Coder.create(model, None, io=io)
+
+        # Get the formatted messages
+        chunks = coder.format_messages()
+        messages = chunks.all_messages()
+
+        # Check if the system message contains our prefix
+        system_message = next(msg for msg in messages if msg["role"] == "system")
+        self.assertTrue(system_message["content"].startswith(test_prefix))
 
     def test_coder_create_with_new_file_oserror(self):
         with GitTemporaryDirectory():
@@ -915,6 +1145,293 @@ This command will print 'Hello, World!' to the console."""
             self.assertIn("Input tokens:", error_message)
             self.assertIn("Output tokens:", error_message)
             self.assertIn("Total tokens:", error_message)
+
+    def test_keyboard_interrupt_handling(self):
+        with GitTemporaryDirectory():
+            io = InputOutput(yes=True)
+            coder = Coder.create(self.GPT35, "diff", io=io)
+
+            # Simulate keyboard interrupt during message processing
+            def mock_send(*args, **kwargs):
+                coder.partial_response_content = "Partial response"
+                coder.partial_response_function_call = dict()
+                raise KeyboardInterrupt()
+
+            coder.send = mock_send
+
+            # Initial valid state
+            sanity_check_messages(coder.cur_messages)
+
+            # Process message that will trigger interrupt
+            list(coder.send_message("Test message"))
+
+            # Verify messages are still in valid state
+            sanity_check_messages(coder.cur_messages)
+            self.assertEqual(coder.cur_messages[-1]["role"], "assistant")
+
+    def test_token_limit_error_handling(self):
+        with GitTemporaryDirectory():
+            io = InputOutput(yes=True)
+            coder = Coder.create(self.GPT35, "diff", io=io)
+
+            # Simulate token limit error
+            def mock_send(*args, **kwargs):
+                coder.partial_response_content = "Partial response"
+                coder.partial_response_function_call = dict()
+                raise FinishReasonLength()
+
+            coder.send = mock_send
+
+            # Initial valid state
+            sanity_check_messages(coder.cur_messages)
+
+            # Process message that hits token limit
+            list(coder.send_message("Long message"))
+
+            # Verify messages are still in valid state
+            sanity_check_messages(coder.cur_messages)
+            self.assertEqual(coder.cur_messages[-1]["role"], "assistant")
+
+    def test_message_sanity_after_partial_response(self):
+        with GitTemporaryDirectory():
+            io = InputOutput(yes=True)
+            coder = Coder.create(self.GPT35, "diff", io=io)
+
+            # Simulate partial response then interrupt
+            def mock_send(*args, **kwargs):
+                coder.partial_response_content = "Partial response"
+                coder.partial_response_function_call = dict()
+                raise KeyboardInterrupt()
+
+            coder.send = mock_send
+
+            list(coder.send_message("Test"))
+
+            # Verify message structure remains valid
+            sanity_check_messages(coder.cur_messages)
+            self.assertEqual(coder.cur_messages[-1]["role"], "assistant")
+
+    def test_normalize_language(self):
+        coder = Coder.create(self.GPT35, None, io=InputOutput())
+
+        # Test None and empty
+        self.assertIsNone(coder.normalize_language(None))
+        self.assertIsNone(coder.normalize_language(""))
+
+        # Test "C" and "POSIX"
+        self.assertIsNone(coder.normalize_language("C"))
+        self.assertIsNone(coder.normalize_language("POSIX"))
+
+        # Test already formatted names
+        self.assertEqual(coder.normalize_language("English"), "English")
+        self.assertEqual(coder.normalize_language("French"), "French")
+
+        # Test common locale codes (fallback map, assuming babel is not installed or fails)
+        with patch("aider.coders.base_coder.Locale", None):
+            self.assertEqual(coder.normalize_language("en_US"), "English")
+            self.assertEqual(coder.normalize_language("fr_FR"), "French")
+            self.assertEqual(coder.normalize_language("es"), "Spanish")
+            self.assertEqual(coder.normalize_language("de_DE.UTF-8"), "German")
+            self.assertEqual(
+                coder.normalize_language("zh-CN"), "Chinese"
+            )  # Test hyphen in fallback
+            self.assertEqual(coder.normalize_language("ja"), "Japanese")
+            self.assertEqual(
+                coder.normalize_language("unknown_code"), "unknown_code"
+            )  # Fallback to original
+
+        # Test with babel.Locale mocked (available)
+        mock_babel_locale = MagicMock()
+        mock_locale_instance = MagicMock()
+        mock_babel_locale.parse.return_value = mock_locale_instance
+
+        with patch("aider.coders.base_coder.Locale", mock_babel_locale):
+            mock_locale_instance.get_display_name.return_value = "english"  # For en_US
+            self.assertEqual(coder.normalize_language("en_US"), "English")
+            mock_babel_locale.parse.assert_called_with("en_US")
+            mock_locale_instance.get_display_name.assert_called_with("en")
+
+            mock_locale_instance.get_display_name.return_value = "french"  # For fr-FR
+            self.assertEqual(coder.normalize_language("fr-FR"), "French")  # Test with hyphen
+            mock_babel_locale.parse.assert_called_with("fr_FR")  # Hyphen replaced
+            mock_locale_instance.get_display_name.assert_called_with("en")
+
+        # Test with babel.Locale raising an exception (simulating parse failure)
+        mock_babel_locale_error = MagicMock()
+        mock_babel_locale_error.parse.side_effect = Exception("Babel parse error")
+        with patch("aider.coders.base_coder.Locale", mock_babel_locale_error):
+            self.assertEqual(coder.normalize_language("en_US"), "English")  # Falls back to map
+
+    def test_get_user_language(self):
+        io = InputOutput()
+        coder = Coder.create(self.GPT35, None, io=io)
+
+        # 1. Test with self.chat_language set
+        coder.chat_language = "fr_CA"
+        with patch.object(coder, "normalize_language", return_value="French Canadian") as mock_norm:
+            self.assertEqual(coder.get_user_language(), "French Canadian")
+            mock_norm.assert_called_once_with("fr_CA")
+        coder.chat_language = None  # Reset
+
+        # 2. Test with locale.getlocale()
+        with patch("locale.getlocale", return_value=("en_GB", "UTF-8")) as mock_getlocale:
+            with patch.object(
+                coder, "normalize_language", return_value="British English"
+            ) as mock_norm:
+                self.assertEqual(coder.get_user_language(), "British English")
+                mock_getlocale.assert_called_once()
+                mock_norm.assert_called_once_with("en_GB")
+
+        # Test with locale.getlocale() returning None or empty
+        with patch("locale.getlocale", return_value=(None, None)) as mock_getlocale:
+            with patch("os.environ.get") as mock_env_get:  # Ensure env vars are not used yet
+                mock_env_get.return_value = None
+                self.assertIsNone(coder.get_user_language())  # Should be None if nothing found
+
+        # 3. Test with environment variables: LANG
+        with patch(
+            "locale.getlocale", side_effect=Exception("locale error")
+        ):  # Mock locale to fail
+            with patch("os.environ.get") as mock_env_get:
+                mock_env_get.side_effect = lambda key: "de_DE.UTF-8" if key == "LANG" else None
+                with patch.object(coder, "normalize_language", return_value="German") as mock_norm:
+                    self.assertEqual(coder.get_user_language(), "German")
+                    mock_env_get.assert_any_call("LANG")
+                    mock_norm.assert_called_once_with("de_DE")
+
+        # Test LANGUAGE (takes precedence over LANG if both were hypothetically checked
+        # by os.environ.get, but our code checks in order, so we mock the first one it finds)
+        with patch("locale.getlocale", side_effect=Exception("locale error")):
+            with patch("os.environ.get") as mock_env_get:
+                mock_env_get.side_effect = lambda key: "es_ES" if key == "LANGUAGE" else None
+                with patch.object(coder, "normalize_language", return_value="Spanish") as mock_norm:
+                    self.assertEqual(coder.get_user_language(), "Spanish")
+                    mock_env_get.assert_any_call("LANGUAGE")  # LANG would be called first
+                    mock_norm.assert_called_once_with("es_ES")
+
+        # 4. Test priority: chat_language > locale > env
+        coder.chat_language = "it_IT"
+        with patch("locale.getlocale", return_value=("en_US", "UTF-8")) as mock_getlocale:
+            with patch("os.environ.get", return_value="de_DE") as mock_env_get:
+                with patch.object(
+                    coder, "normalize_language", side_effect=lambda x: x.upper()
+                ) as mock_norm:
+                    self.assertEqual(coder.get_user_language(), "IT_IT")  # From chat_language
+                    mock_norm.assert_called_once_with("it_IT")
+                    mock_getlocale.assert_not_called()
+                    mock_env_get.assert_not_called()
+        coder.chat_language = None
+
+        # 5. Test when no language is found
+        with patch("locale.getlocale", side_effect=Exception("locale error")):
+            with patch("os.environ.get", return_value=None) as mock_env_get:
+                self.assertIsNone(coder.get_user_language())
+
+    def test_architect_coder_auto_accept_true(self):
+        with GitTemporaryDirectory():
+            io = InputOutput(yes=True)
+            io.confirm_ask = MagicMock(return_value=True)
+
+            # Create an ArchitectCoder with auto_accept_architect=True
+            with patch("aider.coders.architect_coder.AskCoder.__init__", return_value=None):
+                from aider.coders.architect_coder import ArchitectCoder
+
+                coder = ArchitectCoder()
+                coder.io = io
+                coder.main_model = self.GPT35
+                coder.auto_accept_architect = True
+                coder.verbose = False
+                coder.total_cost = 0
+                coder.cur_messages = []
+                coder.done_messages = []
+                coder.summarizer = MagicMock()
+                coder.summarizer.too_big.return_value = False
+
+                # Mock editor_coder creation and execution
+                mock_editor = MagicMock()
+                with patch("aider.coders.architect_coder.Coder.create", return_value=mock_editor):
+                    # Set partial response content
+                    coder.partial_response_content = "Make these changes to the code"
+
+                    # Call reply_completed
+                    coder.reply_completed()
+
+                    # Verify that confirm_ask was not called (auto-accepted)
+                    io.confirm_ask.assert_not_called()
+
+                    # Verify that editor coder was created and run
+                    mock_editor.run.assert_called_once()
+
+    def test_architect_coder_auto_accept_false_confirmed(self):
+        with GitTemporaryDirectory():
+            io = InputOutput(yes=False)
+            io.confirm_ask = MagicMock(return_value=True)
+
+            # Create an ArchitectCoder with auto_accept_architect=False
+            with patch("aider.coders.architect_coder.AskCoder.__init__", return_value=None):
+                from aider.coders.architect_coder import ArchitectCoder
+
+                coder = ArchitectCoder()
+                coder.io = io
+                coder.main_model = self.GPT35
+                coder.auto_accept_architect = False
+                coder.verbose = False
+                coder.total_cost = 0
+                coder.cur_messages = []
+                coder.done_messages = []
+                coder.summarizer = MagicMock()
+                coder.summarizer.too_big.return_value = False
+                coder.cur_messages = []
+                coder.done_messages = []
+                coder.summarizer = MagicMock()
+                coder.summarizer.too_big.return_value = False
+
+                # Mock editor_coder creation and execution
+                mock_editor = MagicMock()
+                with patch("aider.coders.architect_coder.Coder.create", return_value=mock_editor):
+                    # Set partial response content
+                    coder.partial_response_content = "Make these changes to the code"
+
+                    # Call reply_completed
+                    coder.reply_completed()
+
+                    # Verify that confirm_ask was called
+                    io.confirm_ask.assert_called_once_with("Edit the files?")
+
+                    # Verify that editor coder was created and run
+                    mock_editor.run.assert_called_once()
+
+    def test_architect_coder_auto_accept_false_rejected(self):
+        with GitTemporaryDirectory():
+            io = InputOutput(yes=False)
+            io.confirm_ask = MagicMock(return_value=False)
+
+            # Create an ArchitectCoder with auto_accept_architect=False
+            with patch("aider.coders.architect_coder.AskCoder.__init__", return_value=None):
+                from aider.coders.architect_coder import ArchitectCoder
+
+                coder = ArchitectCoder()
+                coder.io = io
+                coder.main_model = self.GPT35
+                coder.auto_accept_architect = False
+                coder.verbose = False
+                coder.total_cost = 0
+
+                # Mock editor_coder creation and execution
+                mock_editor = MagicMock()
+                with patch("aider.coders.architect_coder.Coder.create", return_value=mock_editor):
+                    # Set partial response content
+                    coder.partial_response_content = "Make these changes to the code"
+
+                    # Call reply_completed
+                    coder.reply_completed()
+
+                    # Verify that confirm_ask was called
+                    io.confirm_ask.assert_called_once_with("Edit the files?")
+
+                    # Verify that editor coder was NOT created or run
+                    # (because user rejected the changes)
+                    mock_editor.run.assert_not_called()
 
 
 if __name__ == "__main__":

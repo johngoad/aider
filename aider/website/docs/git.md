@@ -1,6 +1,6 @@
 ---
 parent: More info
-nav_order: 800
+nav_order: 100
 description: Aider is tightly integrated with git.
 ---
 
@@ -22,9 +22,16 @@ This keeps your edits separate from aider's edits, and makes sure you never lose
 
 ## In-chat commands
 
-Aider also allows you to use in-chat commands to `/diff` or `/undo` the last change.
-To do more complex management of your git history, you cat use raw `git` commands,
-either by using `/git` within the chat, or with standard git tools outside of aider.
+Aider also allows you to use 
+[in-chat commands](/docs/usage/commands.html)
+to perform git operations:
+
+- `/diff` will show all the file changes since the last message you sent.
+- `/undo` will undo and discard the last change.
+- `/commit` to commit all dirty changes with a sensible commit message.
+- `/git` will let you run raw git commands to do more complex management of your git history.
+
+You can also manage your git history outside of aider with your preferred git tools.
 
 ## Disabling git integration
 
@@ -33,17 +40,21 @@ While it is not recommended, you can disable aider's use of git in a few ways:
   - `--no-auto-commits` will stop aider from git committing each of its changes.
   - `--no-dirty-commits` will stop aider from committing dirty files before applying its edits.
   - `--no-git` will completely stop aider from using git on your files. You should ensure you are keeping sensible backups of the files you are working with.
+  - `--git-commit-verify` will run pre-commit hooks when making git commits. By default, aider skips pre-commit hooks by using the `--no-verify` flag (`--git-commit-verify=False`).
 
 ## Commit messages
 
+Aider sends the `--weak-model` a copy of the diffs and the chat history
+and asks it to produce a commit message.
 By default, aider creates commit messages which follow
 [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
 You can customize the
-[commit prompt](https://github.com/paul-gauthier/aider/blob/main/aider/prompts.py#L5)
+[commit prompt](https://github.com/Aider-AI/aider/blob/main/aider/prompts.py#L5)
 with the `--commit-prompt` option.
 You can place that on the command line, or 
 [configure it via a config file or environment variables](https://aider.chat/docs/config.html).
+
 
 ## Commit attribution
 
@@ -60,4 +71,6 @@ Additionally, you can use the following options to prefix commit messages:
 - `--attribute-commit-message-author`: Prefix commit messages with 'aider: ' if aider authored the changes.
 - `--attribute-commit-message-committer`: Prefix all commit messages with 'aider: ', regardless of whether aider authored the changes or not.
 
-Both of these options are disabled by default, but can be useful for easily identifying changes made by aider.
+Finally, you can use `--attribute-co-authored-by` to have aider append a Co-authored-by trailer to the end of the commit string. 
+This will disable appending `(aider)` to the git author and git committer unless you have explicitly enabled those settings.
+

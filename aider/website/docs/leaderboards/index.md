@@ -2,302 +2,267 @@
 highlight_image: /assets/leaderboard.jpg
 nav_order: 950
 description: Quantitative benchmarks of LLM code editing skill.
+has_children: true
 ---
 
 
 # Aider LLM Leaderboards
-{: .no_toc }
 
-Aider works best with LLMs which are good at *editing* code, not just good at writing
-code.
-To evaluate an LLM's editing skill, aider uses a pair of benchmarks that
-assess a model's ability to consistently follow the system prompt
-to successfully edit code.
+Aider excels with LLMs skilled at writing and *editing* code,
+and uses benchmarks to
+evaluate an LLM's ability to follow instructions and edit code successfully without
+human intervention.
+[Aider's polyglot benchmark](https://aider.chat/2024/12/21/polyglot.html#the-polyglot-benchmark) tests LLMs on 225 challenging Exercism coding exercises across C++, Go, Java, JavaScript, Python, and Rust.
 
-The leaderboards below report the results from a number of popular LLMs.
-While [aider can connect to almost any LLM](/docs/llms.html),
-it works best with models that score well on the benchmarks.
+<h2 id="leaderboard-title">Aider polyglot coding leaderboard</h2>
 
-See the following sections for benchmark
-results and additional information:
-- TOC
-{:toc}
-
-## Code editing leaderboard
-
-[Aider's code editing benchmark](/docs/benchmarks.html#the-benchmark) asks the LLM to edit python source files to complete 133 small coding exercises
-from Exercism. 
-This measures the LLM's coding ability, and whether it can
-write new code that integrates into existing code.
-The model also has to successfully apply all its changes to the source file without human intervention.
+<div id="controls-container" style="display: flex; align-items: center; width: 100%; max-width: 800px; margin: 10px auto; gap: 10px; box-sizing: border-box; padding: 0 5px; position: relative;">
+  <input type="text" id="editSearchInput" placeholder="Search..." style="flex-grow: 1; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+  <div id="view-mode-toggle" style="display: inline-flex; border: 1px solid #ccc; border-radius: 4px;">
+    <button id="mode-view-btn" class="mode-button active" data-mode="view" style="padding: 8px 8px; border: none; border-radius: 3px 0 0 3px; cursor: pointer; font-size: 14px; line-height: 1.5; min-width: 50px;">View</button>
+    <button id="mode-select-btn" class="mode-button" data-mode="select" style="padding: 8px 8px; border: none; background-color: #f8f9fa; border-radius: 0; cursor: pointer; border-left: 1px solid #ccc; font-size: 14px; line-height: 1.5; min-width: 50px;">Select</button>
+    <button id="mode-detail-btn" class="mode-button" data-mode="detail" style="padding: 8px 8px; border: none; background-color: #f8f9fa; border-radius: 0 3px 3px 0; cursor: pointer; border-left: 1px solid #ccc; font-size: 14px; line-height: 1.5; min-width: 50px;">Detail</button>
+  </div>
+<button id="close-controls-btn" style="width: 18px; height: 18px; padding: 0; border: 1px solid #ddd; border-radius: 50%; background-color: transparent; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 12px; margin-left: 4px; color: #999;">×</button>
+</div>
 
 <table style="width: 100%; max-width: 800px; margin: auto; border-collapse: collapse; box-shadow: 0 2px 4px rgba(0,0,0,0.1); font-size: 14px;">
   <thead style="background-color: #f2f2f2;">
     <tr>
+      <th style="padding: 8px; width: 40px; text-align: center; vertical-align: middle;">
+        <input type="checkbox" id="select-all-checkbox" style="display: none; cursor: pointer; vertical-align: middle;">
+      </th> <!-- Header checkbox added here -->
       <th style="padding: 8px; text-align: left;">Model</th>
-      <th style="padding: 8px; text-align: center;">Percent completed correctly</th>
-      <th style="padding: 8px; text-align: center;">Percent using correct edit format</th>
-      <th style="padding: 8px; text-align: left;">Command</th>
-      <th style="padding: 8px; text-align: center;">Edit format</th>
+      <th style="padding: 8px; text-align: center; width: 25%">Percent correct</th>
+      <th style="padding: 8px; text-align: center; width: 25%">Cost</th>
+      <th style="padding: 8px; text-align: left;" class="col-command">Command</th>
+      <th style="padding: 8px; text-align: center; width: 10%" class="col-conform">Correct edit format</th>
+      <th style="padding: 8px; text-align: left; width: 10%" class="col-edit-format">Edit Format</th>
     </tr>
   </thead>
   <tbody>
-    {% assign edit_sorted = site.data.edit_leaderboard | sort: 'pass_rate_2' | reverse %}
-    {% for row in edit_sorted %}
-      <tr style="border-bottom: 1px solid #ddd;">
-        <td style="padding: 8px;">{{ row.model }}</td>
-        <td style="padding: 8px; text-align: center;">{{ row.pass_rate_2 }}%</td>
-        <td style="padding: 8px; text-align: center;">{{ row.percent_cases_well_formed }}%</td>
-        <td style="padding: 8px;"><code>{{ row.command }}</code></td>
-        <td style="padding: 8px; text-align: center;">{{ row.edit_format }}</td>
+    {% assign max_cost = 0 %}
+    {% for row in site.data.polyglot_leaderboard %}
+      {% if row.total_cost > max_cost %}
+        {% assign max_cost = row.total_cost %}
+      {% endif %}
+    {% endfor %}
+    {% if max_cost == 0 %}{% assign max_cost = 1 %}{% endif %}
+    {% assign edit_sorted = site.data.polyglot_leaderboard | sort: 'pass_rate_2' | reverse %}
+    {% for row in edit_sorted %} {% comment %} Add loop index for unique IDs {% endcomment %}
+      {% assign row_index = forloop.index0 %}
+      <tr id="main-row-{{ row_index }}">
+        <td style="padding: 8px; text-align: center; vertical-align: middle;">
+          <button class="toggle-details" data-target="details-{{ row_index }}" style="background: none; border: none; cursor: pointer; font-size: 16px; padding: 0; vertical-align: middle;">▶</button>
+          <input type="checkbox" class="row-selector" data-row-index="{{ row_index }}" style="display: none; cursor: pointer; vertical-align: middle;">
+        </td>
+        <td style="padding: 8px;"><span>{{ row.model }}</span></td>
+        <td class="bar-cell">
+          <div class="bar-viz" style="width: {{ row.pass_rate_2 }}%; background-color: rgba(40, 167, 69, 0.3); border-right: 1px solid rgba(40, 167, 69, 0.5);"></div>
+          <span>{{ row.pass_rate_2 }}%</span>
+        </td>
+        <td class="bar-cell cost-bar-cell">
+          {% if row.total_cost > 0 %}
+          <div class="bar-viz cost-bar" data-cost="{{ row.total_cost }}" data-max-cost="{{ max_cost }}" style="width: 0%; background-color: rgba(13, 110, 253, 0.3); border-right: 1px solid rgba(13, 110, 253, 0.5);"></div>
+          {% endif %}
+          {% assign rounded_cost = row.total_cost | times: 1.0 | round: 2 %}
+          <span>{% if row.total_cost == 0 or rounded_cost == 0.00 %}{% else %}${{ rounded_cost }}{% endif %}</span>
+        </td>
+        <td style="padding: 8px;" class="col-command"><span><code>{{ row.command }}</code></span></td>
+        <td style="padding: 8px; text-align: center;" class="col-conform"><span>{{ row.percent_cases_well_formed }}%</span></td>
+        <td style="padding: 8px;" class="col-edit-format"><span>{{ row.edit_format }}</span></td>
+      </tr>
+      <tr class="details-row" id="details-{{ row_index }}" style="display: none; background-color: #f9f9f9;">
+        <td colspan="7" style="padding: 15px; border-bottom: 1px solid #ddd;">
+          <ul style="margin: 0; padding-left: 20px; list-style: none; border-bottom: 1px solid #ddd;">
+            {% for pair in row %}
+              {% if pair[1] != "" and pair[1] != nil %}
+                <li><strong>
+                  {% if pair[0] == 'percent_cases_well_formed' %}
+                    Percent cases well formed
+                  {% else %}
+                    {{ pair[0] | replace: '_', ' ' | capitalize }}
+                  {% endif %}
+                  :</strong>
+                  {% if pair[0] == 'command' %}<code>{{ pair[1] }}</code>{% else %}{{ pair[1] }}{% endif %}
+                </li>
+              {% endif %}
+            {% endfor %}
+          </ul>
+        </td>
       </tr>
     {% endfor %}
   </tbody>
 </table>
 
-<canvas id="editChart" width="800" height="450" style="margin-top: 20px"></canvas>
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-<script>
-  document.addEventListener('DOMContentLoaded', function () {
-    var ctx = document.getElementById('editChart').getContext('2d');
-    var leaderboardData = {
-      labels: [],
-      datasets: [{
-        label: 'Percent completed correctly',
-        data: [],
-        backgroundColor: 'rgba(54, 162, 235, 0.2)',
-        borderColor: 'rgba(54, 162, 235, 1)',
-        borderWidth: 1
-      }]
-    };
-
-    var allData = [];
-    {% for row in edit_sorted %}
-      allData.push({
-        model: '{{ row.model }}',
-        pass_rate_2: {{ row.pass_rate_2 }},
-        percent_cases_well_formed: {{ row.percent_cases_well_formed }}
-      });
-    {% endfor %}
-
-    function updateChart() {
-      var selectedRows = document.querySelectorAll('tr.selected');
-      var showAll = selectedRows.length === 0;
-
-      leaderboardData.labels = [];
-      leaderboardData.datasets[0].data = [];
-
-      allData.forEach(function(row, index) {
-        var rowElement = document.getElementById('edit-row-' + index);
-        if (showAll) {
-          rowElement.classList.remove('selected');
-        }
-        if (showAll || rowElement.classList.contains('selected')) {
-          leaderboardData.labels.push(row.model);
-          leaderboardData.datasets[0].data.push(row.pass_rate_2);
-        }
-      });
-
-      leaderboardChart.update();
-    }
-
-    var tableBody = document.querySelector('table tbody');
-    allData.forEach(function(row, index) {
-      var tr = tableBody.children[index];
-      tr.id = 'edit-row-' + index;
-      tr.style.cursor = 'pointer';
-      tr.onclick = function() {
-        this.classList.toggle('selected');
-        updateChart();
-      };
-    });
-
-    var leaderboardChart = new Chart(ctx, {
-      type: 'bar',
-      data: leaderboardData,
-      options: {
-        scales: {
-          yAxes: [{
-            scaleLabel: {
-              display: true,
-            },
-            ticks: {
-              beginAtZero: true
-            }
-          }]
-        }
-      }
-    });
-
-    updateChart();
-  });
-</script>
 <style>
+  #leaderboard-title {
+    margin-bottom: 20px; /* Add space below the title */
+  }
   tr.selected {
     color: #0056b3;
   }
   table {
     table-layout: fixed;
   }
+  thead {
+    border-top: 1px solid #ddd; /* Add top border to header */
+  }
   td, th {
+    border: none; /* Remove internal cell borders */
     word-wrap: break-word;
     overflow-wrap: break-word;
+    vertical-align: middle; /* Ensure consistent vertical alignment */
   }
-  td:nth-child(3), td:nth-child(4) {
-    font-size: 12px;
+  tbody tr {
+    height: 50px; /* Set a minimum height for all data rows */
+  }
+  td.col-command { /* Command column */
+    font-size: 12px; /* Keep font size adjustment for command column if desired, or remove */
+  }
+
+  /* Hide new columns first on smaller screens */
+  @media screen and (max-width: 991px) {
+    th.col-conform, td.col-conform,
+    th.col-edit-format, td.col-edit-format {
+      display: none;
+    }
+    /* Increase width of Percent correct and Cost columns when others are hidden */
+    th:nth-child(3), td:nth-child(3), /* Percent correct */
+    th:nth-child(4), td:nth-child(4) { /* Cost */
+      width: 33% !important; /* Override inline style */
+    }
+  }
+
+  /* Hide command column on even smaller screens */
+  @media screen and (max-width: 767px) {
+    th.col-command, td.col-command { /* Command column */
+      display: none;
+    }
+  }
+
+  /* --- Control Styles --- */
+  #controls-container {
+    margin-bottom: 20px; /* Add some space below controls */
+  }
+
+  #editSearchInput, #view-mode-select {
+    padding: 8px 12px; /* Consistent padding */
+    border: 1px solid #ccc; /* Slightly softer border */
+    border-radius: 4px;
+    font-size: 14px; /* Match table font size */
+    height: 38px; /* Match height */
+    box-sizing: border-box; /* Include padding/border in height */
+  }
+
+
+  .bar-cell {
+    position: relative; /* Positioning context for the bar */
+    padding: 8px;
+    /* text-align: center; Removed */
+    overflow: hidden; /* Prevent bar from overflowing cell boundaries if needed */
+  }
+  .cost-bar-cell {
+    background-image: none; /* Remove default gradient for cost cells */
+  }
+  .percent-tick, .cost-tick {
+    position: absolute;
+    top: 50%;
+    transform: translateY(10px);
+    height: 8px; /* Short tick */
+    width: 1px;
+    background-color: rgba(170, 170, 170, 0.5); 
+    z-index: 2; /* Above the bar but below the text */
+  }
+  .bar-viz {
+    position: absolute;
+    left: 0;
+    top: 50%; /* Position at the middle of the cell */
+    transform: translateY(-50%); /* Center the bar vertically */
+    z-index: 1; /* Above background, below ticks and text */
+    height: 36px;
+    border-radius: 0 2px 2px 0; /* Slightly rounded end corners */
+    /* Width and colors are set inline via style attribute */
+  }
+  /* Add a tooltip class for showing cost information on hover */
+  .cost-bar-cell:hover .bar-viz[style*="background-image"] {
+    animation: stripe-animation 2s linear infinite;
+  }
+  @keyframes stripe-animation {
+    0% { background-position: 0 0; }
+    100% { background-position: 20px 0; }
+  }
+  .bar-cell span {
+     position: absolute; /* Position relative to the cell */
+     left: 5px; /* Position slightly inside the left edge */
+     top: 50%; /* Center vertically */
+     transform: translateY(-50%); /* Adjust vertical centering */
+     z-index: 3; /* Ensure text is above everything else */
+     background-color: rgba(255, 255, 255, 0.7); /* Semi-transparent white background */
+     padding: 0 4px; /* Add padding around the text */
+     border-radius: 3px; /* Rounded corners for the text background */
+     font-size: 14px; /* Adjust font size for the numbers */
+  }
+  .toggle-details {
+    color: #888; /* Make toggle symbol more subtle */
+    transition: color 0.2s; /* Smooth transition on hover */
+  }
+
+
+  /* Style for selected rows */
+  tr.row-selected > td {
+    background-color: #e7f3ff; /* Example light blue highlight */
+  }
+
+  /* Ensure checkbox is vertically aligned if needed */
+  .row-selector {
+    vertical-align: middle;
+  }
+
+  /* Hide rows not matching the filter */
+  tr.hidden-by-mode {
+      display: none !important; /* Use important to override other display styles if necessary */
+  }
+  tr.hidden-by-search {
+      display: none !important;
+  }
+
+  /* --- Mode Toggle Button Styles --- */
+  #view-mode-toggle {
+    height: 38px; /* Match input height */
+    box-sizing: border-box;
+    flex-shrink: 0; /* Prevent toggle from shrinking on small screens */
+  }
+  .mode-button {
+    transition: background-color 0.2s ease-in-out, color 0.2s ease-in-out;
+    white-space: nowrap; /* Prevent text wrapping */
+  }
+  .mode-button:not(.active) {
+    background-color: #f8f9fa; /* Light grey background */
+    color: #495057; /* Dark grey text */
+  }
+  .mode-button:not(.active):hover {
+    background-color: #e2e6ea; /* Slightly darker grey on hover */
+  }
+
+  /* Style for highlighted rows in view mode */
+  tr.view-highlighted > td {
+    background-color: #fffef5; /* Very light yellow/cream */
+    /* Border moved to specific cell below */
+  }
+  /* Apply border and adjust padding ONLY for the first *visible* cell (Model name) in view mode */
+  tr.view-highlighted > td:nth-child(2) {
+     border-left: 4px solid #ffc107; /* Warning yellow border */
+     /* Original padding is 8px. Subtract border width. */
+     padding-left: 4px;
   }
 </style>
 
-## Code refactoring leaderboard
-
-[Aider's refactoring benchmark](https://github.com/paul-gauthier/refactor-benchmark) asks the LLM to refactor 89 large methods from large python classes. This is a more challenging benchmark, which tests the model's ability to output long chunks of code without skipping sections or making mistakes. It was developed to provoke and measure [GPT-4 Turbo's "lazy coding" habit](/2023/12/21/unified-diffs.html).
-
-The refactoring benchmark requires a large context window to
-work with large source files.
-Therefore, results are available for fewer models.
-
-<table style="width: 100%; max-width: 800px; margin: auto; border-collapse: collapse; box-shadow: 0 2px 4px rgba(0,0,0,0.1); font-size: 14px;">
-  <thead style="background-color: #f2f2f2;">
-    <tr>
-      <th style="padding: 8px; text-align: left;">Model</th>
-      <th style="padding: 8px; text-align: center;">Percent completed correctly</th>
-      <th style="padding: 8px; text-align: center;">Percent using correct edit format</th>
-      <th style="padding: 8px; text-align: left;">Command</th>
-      <th style="padding: 8px; text-align: center;">Edit format</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% assign refac_sorted = site.data.refactor_leaderboard | sort: 'pass_rate_1' | reverse %}
-    {% for row in refac_sorted %}
-      <tr style="border-bottom: 1px solid #ddd;">
-        <td style="padding: 8px;">{{ row.model }}</td>
-        <td style="padding: 8px; text-align: center;">{{ row.pass_rate_1 }}%</td>
-        <td style="padding: 8px; text-align: center;">{{ row.percent_cases_well_formed }}%</td>
-        <td style="padding: 8px;"><code>{{ row.command }}</code></td>
-        <td style="padding: 8px; text-align: center;">{{ row.edit_format }}</td>
-      </tr>
-    {% endfor %}
-  </tbody>
-</table>
-
-<canvas id="refacChart" width="800" height="450" style="margin-top: 20px"></canvas>
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script>
-  document.addEventListener('DOMContentLoaded', function () {
-    var ctx = document.getElementById('refacChart').getContext('2d');
-    var leaderboardData = {
-      labels: [],
-      datasets: [{
-        label: 'Percent completed correctly',
-        data: [],
-        backgroundColor: 'rgba(54, 162, 235, 0.2)',
-        borderColor: 'rgba(54, 162, 235, 1)',
-        borderWidth: 1
-      }]
-    };
-
-    var allData = [];
-    {% for row in refac_sorted %}
-      allData.push({
-        model: '{{ row.model }}',
-        pass_rate_1: {{ row.pass_rate_1 }},
-        percent_cases_well_formed: {{ row.percent_cases_well_formed }}
-      });
-    {% endfor %}
-
-    function updateChart() {
-      var selectedRows = document.querySelectorAll('tr.selected');
-      var showAll = selectedRows.length === 0;
-
-      leaderboardData.labels = [];
-      leaderboardData.datasets[0].data = [];
-
-      allData.forEach(function(row, index) {
-        var rowElement = document.getElementById('refac-row-' + index);
-        if (showAll) {
-          rowElement.classList.remove('selected');
-        }
-        if (showAll || rowElement.classList.contains('selected')) {
-          leaderboardData.labels.push(row.model);
-          leaderboardData.datasets[0].data.push(row.pass_rate_1);
-        }
-      });
-
-      leaderboardChart.update();
-    }
-
-    var tableBody = document.querySelectorAll('table tbody')[1];
-    allData.forEach(function(row, index) {
-      var tr = tableBody.children[index];
-      tr.id = 'refac-row-' + index;
-      tr.style.cursor = 'pointer';
-      tr.onclick = function() {
-        this.classList.toggle('selected');
-        updateChart();
-      };
-    });
-
-    var leaderboardChart = new Chart(ctx, {
-      type: 'bar',
-      data: leaderboardData,
-      options: {
-        scales: {
-          yAxes: [{
-            scaleLabel: {
-              display: true,
-            },
-            ticks: {
-              beginAtZero: true
-            }
-          }]
-        }
-      }
-    });
-
-    updateChart();
-  });
+{% include leaderboard_table.js %}
 </script>
 
-
-## LLM code editing skill by model release date
-
-[![connecting to many LLMs](/assets/models-over-time.svg)](https://aider.chat/assets/models-over-time.svg)
-
-
-## Notes on benchmarking results
-
-The key benchmarking results are:
-
-- **Percent completed correctly** - Measures what percentage of the coding tasks that the LLM completed successfully. To complete a task, the LLM must solve the programming assignment *and* edit the code to implement that solution.
-- **Percent using correct edit format** - Measures the percent of coding tasks where the LLM complied with the edit format specified in the system prompt. If the LLM makes edit mistakes, aider will give it feedback and ask for a fixed copy of the edit. The best models can reliably conform to the edit format, without making errors.
-
-
-## Notes on the edit format
-
-Aider uses different "edit formats" to collect code edits from different LLMs.
-The "whole" format is the easiest for an LLM to use, but it uses a lot of tokens
-and may limit how large a file can be edited.
-Models which can use one of the diff formats are much more efficient,
-using far fewer tokens.
-Models that use a diff-like format are able to 
-edit larger files with less cost and without hitting token limits.
-
-Aider is configured to use the best edit format for the popular OpenAI and Anthropic models
-and the [other models recommended on the LLM page](/docs/llms.html).
-For lesser known models aider will default to using the "whole" editing format
-since it is the easiest format for an LLM to use.
-
-## Contributing benchmark results
-
-Contributions of benchmark results are welcome!
-See the
-[benchmark README](https://github.com/paul-gauthier/aider/blob/main/benchmark/README.md)
-for information on running aider's code editing benchmarks.
-Submit results by opening a PR with edits to the
-[benchmark results data files](https://github.com/paul-gauthier/aider/blob/main/website/_data/).
-
-
-<p class="post-date">
+<p class="post-date" style="margin-top: 20px;">
 By Paul Gauthier,
 last updated
 <!--[[[cog
@@ -306,8 +271,7 @@ import datetime
 
 files = [
     'aider/website/docs/leaderboards/index.md',
-    'aider/website/_data/edit_leaderboard.yml',
-    'aider/website/_data/refactor_leaderboard.yml'
+    'aider/website/_data/polyglot_leaderboard.yml',
 ]
 
 def get_last_modified_date(file):
@@ -321,6 +285,6 @@ mod_dates = [get_last_modified_date(file) for file in files]
 latest_mod_date = max(mod_dates)
 cog.out(f"{latest_mod_date.strftime('%B %d, %Y.')}")
 ]]]-->
-August 30, 2024.
+November 20, 2025.
 <!--[[[end]]]-->
 </p>

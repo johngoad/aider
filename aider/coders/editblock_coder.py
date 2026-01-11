@@ -35,28 +35,46 @@ class EditBlockCoder(Coder):
 
         return edits
 
-    def apply_edits(self, edits):
+    def apply_edits_dry_run(self, edits):
+        return self.apply_edits(edits, dry_run=True)
+
+    def apply_edits(self, edits, dry_run=False):
         failed = []
         passed = []
+        updated_edits = []
 
         for edit in edits:
             path, original, updated = edit
             full_path = self.abs_root_path(path)
-            content = self.io.read_text(full_path)
-            new_content = do_replace(full_path, content, original, updated, self.fence)
-            if not new_content:
+            new_content = None
+
+            if Path(full_path).exists():
+                content = self.io.read_text(full_path)
+                new_content = do_replace(full_path, content, original, updated, self.fence)
+
+            # If the edit failed, and
+            # this is not a "create a new file" with an empty original...
+            # https://github.com/Aider-AI/aider/issues/2258
+            if not new_content and original.strip():
                 # try patching any of the other files in the chat
                 for full_path in self.abs_fnames:
                     content = self.io.read_text(full_path)
                     new_content = do_replace(full_path, content, original, updated, self.fence)
                     if new_content:
+                        path = self.get_rel_fname(full_path)
                         break
 
+            updated_edits.append((path, original, updated))
+
             if new_content:
-                self.io.write_text(full_path, new_content)
+                if not dry_run:
+                    self.io.write_text(full_path, new_content)
                 passed.append(edit)
             else:
                 failed.append(edit)
+
+        if dry_run:
+            return updated_edits
 
         if not failed:
             return
@@ -365,9 +383,13 @@ def do_replace(fname, content, before_text, after_text, fence=None):
     return new_content
 
 
-HEAD = "<<<<<<< SEARCH"
-DIVIDER = "======="
-UPDATED = ">>>>>>> REPLACE"
+HEAD = r"^<{5,9} SEARCH>?\s*$"
+DIVIDER = r"^={5,9}\s*$"
+UPDATED = r"^>{5,9} REPLACE\s*$"
+
+HEAD_ERR = "<<<<<<< SEARCH"
+DIVIDER_ERR = "======="
+UPDATED_ERR = ">>>>>>> REPLACE"
 
 separators = "|".join([HEAD, DIVIDER, UPDATED])
 
@@ -379,6 +401,9 @@ missing_filename_err = (
     " {fence[0]}"
 )
 
+# Always be willing to treat triple-backticks as a fence when searching for filenames
+triple_backticks = "`" * 3
+
 
 def strip_filename(filename, fence):
     filename = filename.strip()
@@ -388,6 +413,15 @@ def strip_filename(filename, fence):
 
     start_fence = fence[0]
     if filename.startswith(start_fence):
+        candidate = filename[len(start_fence) :]
+        if candidate and ("." in candidate or "/" in candidate):
+            return candidate
+        return
+
+    if filename.startswith(triple_backticks):
+        candidate = filename[len(triple_backticks) :]
+        if candidate and ("." in candidate or "/" in candidate):
+            return candidate
         return
 
     filename = filename.rstrip(":")
@@ -396,7 +430,7 @@ def strip_filename(filename, fence):
     filename = filename.strip("`")
     filename = filename.strip("*")
 
-    # https://github.com/paul-gauthier/aider/issues/1158
+    # https://github.com/Aider-AI/aider/issues/1158
     # filename = filename.replace("\\_", "_")
 
     return filename
@@ -406,6 +440,10 @@ def find_original_update_blocks(content, fence=DEFAULT_FENCE, valid_fnames=None)
     lines = content.splitlines(keepends=True)
     i = 0
     current_filename = None
+
+    head_pattern = re.compile(HEAD)
+    divider_pattern = re.compile(DIVIDER)
+    updated_pattern = re.compile(UPDATED)
 
     while i < len(lines):
         line = lines[i]
@@ -425,7 +463,14 @@ def find_original_update_blocks(content, fence=DEFAULT_FENCE, valid_fnames=None)
             "```csh",
             "```tcsh",
         ]
-        next_is_editblock = i + 1 < len(lines) and lines[i + 1].rstrip() == HEAD
+
+        # Check if the next line or the one after that is an editblock
+        next_is_editblock = (
+            i + 1 < len(lines)
+            and head_pattern.match(lines[i + 1].strip())
+            or i + 2 < len(lines)
+            and head_pattern.match(lines[i + 2].strip())
+        )
 
         if any(line.strip().startswith(start) for start in shell_starts) and not next_is_editblock:
             shell_content = []
@@ -440,15 +485,13 @@ def find_original_update_blocks(content, fence=DEFAULT_FENCE, valid_fnames=None)
             continue
 
         # Check for SEARCH/REPLACE blocks
-        if line.strip() == HEAD:
+        if head_pattern.match(line.strip()):
             try:
                 # if next line after HEAD exists and is DIVIDER, it's a new file
-                if i + 1 < len(lines) and lines[i + 1].strip() == DIVIDER:
+                if i + 1 < len(lines) and divider_pattern.match(lines[i + 1].strip()):
                     filename = find_filename(lines[max(0, i - 3) : i], fence, None)
                 else:
-                    filename = find_filename(
-                        lines[max(0, i - 3) : i], fence, valid_fnames
-                    )
+                    filename = find_filename(lines[max(0, i - 3) : i], fence, valid_fnames)
 
                 if not filename:
                     if current_filename:
@@ -460,21 +503,27 @@ def find_original_update_blocks(content, fence=DEFAULT_FENCE, valid_fnames=None)
 
                 original_text = []
                 i += 1
-                while i < len(lines) and not lines[i].strip() == DIVIDER:
+                while i < len(lines) and not divider_pattern.match(lines[i].strip()):
                     original_text.append(lines[i])
                     i += 1
 
-                if i >= len(lines) or lines[i].strip() != DIVIDER:
-                    raise ValueError(f"Expected `{DIVIDER}`")
+                if i >= len(lines) or not divider_pattern.match(lines[i].strip()):
+                    raise ValueError(f"Expected `{DIVIDER_ERR}`")
 
                 updated_text = []
                 i += 1
-                while i < len(lines) and not lines[i].strip() in (UPDATED, DIVIDER):
+                while i < len(lines) and not (
+                    updated_pattern.match(lines[i].strip())
+                    or divider_pattern.match(lines[i].strip())
+                ):
                     updated_text.append(lines[i])
                     i += 1
 
-                if i >= len(lines) or lines[i].strip() not in (UPDATED, DIVIDER):
-                    raise ValueError(f"Expected `{UPDATED}` or `{DIVIDER}`")
+                if i >= len(lines) or not (
+                    updated_pattern.match(lines[i].strip())
+                    or divider_pattern.match(lines[i].strip())
+                ):
+                    raise ValueError(f"Expected `{UPDATED_ERR}` or `{DIVIDER_ERR}`")
 
                 yield filename, "".join(original_text), "".join(updated_text)
 
@@ -516,7 +565,7 @@ def find_filename(lines, fence, valid_fnames):
             filenames.append(filename)
 
         # Only continue as long as we keep seeing fences
-        if not line.startswith(fence[0]):
+        if not line.startswith(fence[0]) and not line.startswith(triple_backticks):
             break
 
     if not filenames:

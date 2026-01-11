@@ -17,10 +17,10 @@ class WholeFileCoder(Coder):
         try:
             return self.get_edits(mode="diff")
         except ValueError:
-            return self.get_multi_response_content()
+            return self.get_multi_response_content_in_progress()
 
     def get_edits(self, mode="update"):
-        content = self.get_multi_response_content()
+        content = self.get_multi_response_content_in_progress()
 
         chat_files = self.get_inchat_relative_files()
 
@@ -58,6 +58,8 @@ class WholeFileCoder(Coder):
                     fname = fname.strip("*")  # handle **filename.py**
                     fname = fname.rstrip(":")
                     fname = fname.strip("`")
+                    fname = fname.lstrip("#")
+                    fname = fname.strip()
 
                     # Issue #1232
                     if len(fname) > 250:

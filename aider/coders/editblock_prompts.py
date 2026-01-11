@@ -1,5 +1,6 @@
 # flake8: noqa: E501
 
+from . import shell
 from .base_prompts import CoderPrompts
 
 
@@ -7,11 +8,9 @@ class EditBlockPrompts(CoderPrompts):
     main_system = """Act as an expert software developer.
 Always use best practices when coding.
 Respect and use existing conventions, libraries, etc that are already present in the code base.
-{lazy_prompt}
+{final_reminders}
 Take requests for changes to the supplied code.
 If the request is ambiguous, ask questions.
-
-Always reply to the user in the same language they are using.
 
 Once you understand the request you MUST:
 
@@ -27,26 +26,8 @@ You can keep asking if you then decide you need to edit more files.
 
 All changes to files must use this *SEARCH/REPLACE block* format.
 ONLY EVER RETURN CODE IN A *SEARCH/REPLACE BLOCK*!
-
-4. *Concisely* suggest any shell commands the user might want to run in ```bash blocks.
-
-Just suggest shell commands this way, not example code.
-Only suggest complete shell commands that area ready to execute, without placeholders.
-Only suggest at most a few shell commands at a time, not more than 1-3.
-
-Use the appropriate shell based on the user's system info:
-{platform}
-
-Examples of when to suggest shell commands:
-
-- If you changed a self-contained html file, suggest an OS-appropriate command to open a browser to view it to see the updated content.
-- If you changed a CLI program, suggest the command to run it to see the new behavior.
-- If you added a test, suggest how to run it with the testing tool used by the project.
-- Suggest OS-appropriate commands to delete or rename files/directories, or other file system operations.
-- If your code changes add new dependencies, suggest the command to install them.
-- Etc.
+{shell_cmd_prompt}
 """
-
     example_messages = [
         dict(
             role="user",
@@ -149,12 +130,13 @@ Every *SEARCH/REPLACE block* must use this format:
 8. The closing fence: {fence[1]}
 
 Use the *FULL* file path, as shown to you by the user.
-
+{quad_backtick_reminder}
 Every *SEARCH* section must *EXACTLY MATCH* the existing file content, character for character, including all comments, docstrings, etc.
 If the file contains code or other data wrapped/escaped in json/xml/quotes or other containers, you need to propose edits to the literal contents of the file, including the container markup.
 
-*SEARCH/REPLACE* blocks will replace *all* matching occurrences.
-Include enough lines to make the SEARCH blocks uniquely match the lines to change.
+*SEARCH/REPLACE* blocks will *only* replace the first match occurrence.
+Including multiple unique *SEARCH/REPLACE* blocks if needed.
+Include enough lines in each SEARCH section to uniquely match each set of lines that need to change.
 
 Keep *SEARCH/REPLACE* blocks concise.
 Break large *SEARCH/REPLACE* blocks into a series of smaller blocks that each change a small portion of the file.
@@ -172,17 +154,19 @@ If you want to put code in a new file, use a *SEARCH/REPLACE block* with:
 - An empty `SEARCH` section
 - The new file's contents in the `REPLACE` section
 
-To rename files which have been added to the chat, use shell commands at the end of your response.
-
-{lazy_prompt}
-ONLY EVER RETURN CODE IN A *SEARCH/REPLACE BLOCK*!
-
-Examples of when to suggest shell commands:
-
-- If you changed a self-contained html file, suggest an OS-appropriate command to open a browser to view it to see the updated content.
-- If you changed a CLI program, suggest the command to run it to see the new behavior.
-- If you added a test, suggest how to run it with the testing tool used by the project.
-- Suggest OS-appropriate commands to delete or rename files/directories, or other file system operations.
-- If your code changes add new dependencies, suggest the command to install them.
-- Etc.
+{rename_with_shell}{go_ahead_tip}{final_reminders}ONLY EVER RETURN CODE IN A *SEARCH/REPLACE BLOCK*!
+{shell_cmd_reminder}
 """
+
+    rename_with_shell = """To rename files which have been added to the chat, use shell commands at the end of your response.
+
+"""
+
+    go_ahead_tip = """If the user just says something like "ok" or "go ahead" or "do that" they probably want you to make SEARCH/REPLACE blocks for the code changes you just proposed.
+The user will say when they've applied your edits. If they haven't explicitly confirmed the edits have been applied, they probably want proper SEARCH/REPLACE blocks.
+
+"""
+
+    shell_cmd_prompt = shell.shell_cmd_prompt
+    no_shell_cmd_prompt = shell.no_shell_cmd_prompt
+    shell_cmd_reminder = shell.shell_cmd_reminder

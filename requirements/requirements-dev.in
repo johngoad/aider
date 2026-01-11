@@ -1,8 +1,5 @@
--c ../requirements.txt
-#
-#    pip-compile --output-file=requirements-dev.txt requirements-dev.in --upgrade
-#
 pytest
+pytest-env
 pip-tools
 lox
 matplotlib
@@ -12,3 +9,6 @@ imgcat
 pre-commit
 cogapp
 semver
+codespell
+uv
+google-cloud-bigquery
